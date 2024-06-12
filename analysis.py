@@ -1,23 +1,20 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy
+import numpy as np
 from scipy.signal import savgol_filter 
 
-a = pd.read_csv(r"C:\Users\carly\source\repos\f1_23_net\x64\Release\a.csv", sep=",")
+a = pd.read_csv(r"x64\Release\laps\laps_VERSTAPPEN", sep=",")
+b = pd.read_csv(r"x64\Release\laps\laps_PIASTRI", sep=",")
 print(a)
 
-x1 = a[["WearRF"]].apply(savgol_filter,  window_length=631, polyorder=2)
-x2 = a[["WearLF"]].apply(savgol_filter,  window_length=631, polyorder=2)
-x3 = a[["WearRB"]].apply(savgol_filter,  window_length=631, polyorder=2)
-x4 = a[["WearLB"]].apply(savgol_filter,  window_length=631, polyorder=2)
+
+x1 = a[["LapTime"]]
+x2 = b[["LapTime"]]
 
 print(x1.head())
-y = a.get("time")
-
-plt.plot(y, x1, label  = "WearRF")
-plt.plot(y, x2, label  = "WearLF")
-plt.plot(y, x3, label  = "WearRB")
-plt.plot(y, x4, label  = "WearLB")
+y = np.arange(4)
+plt.plot(y, x1, label  = "Me")
+plt.plot(y, x2, label  = "Verstappen")
 
 plt.legend()
 plt.show()

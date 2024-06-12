@@ -16,6 +16,12 @@ struct packet
 	char *data;
 };
 
+struct driver_string
+{
+	int len;
+	std::string name;
+};
+
 struct pkt
 {
 	char *data;
@@ -245,8 +251,13 @@ int rem_euclid(int a, int b)
 	return ret;
 }
 
+struct variable_type
+{
+	std::string name;
+	const std::type_info* type;
+};
+
 struct indexed_map
 {
-	std::map<std::string, const std::type_info*> map;
-	std::vector<std::string> index;
+	std::vector<variable_type> map;
 };
