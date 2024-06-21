@@ -1,55 +1,74 @@
+﻿// CMakeProject2.cpp: define el punto de entrada de la aplicación.
+//
 
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#include <iostream>
+#include <print>
+#include <frozen/map.h>
+#include <frozen/string.h>
 #include <WinSock2.h>
 #include <WS2tcpip.h>
-#include "packet_read.hpp"
-#include <vector>
-#include <any>
-#include <map>
-#include <print>
-#include <fstream>
-#include <format>
-#include <chrono>
-#include <filesystem>
+#include <concepts>
+#include <cstring>
+#include <type_traits>
 
 #pragma comment(lib, "Ws2_32.lib")
+#define read_comp_pkt(size, ptr, t) const_for<size>([&](auto i){std::get<i.value>(t) = read_var<std::tuple_element_t<i.value, decltype(t)>>::call(&ptr);});
 
-std::map<int, std::string> trackid = {
-    {0, "Melbourne"},
-    {1, "Paul Ricard"},
-    {2, "Shanghai"},
-    {3, "Sakhir (Bahrain)"},
-    {4, "Catalunya"},
-    {5, "Monaco"},
-    {6, "Montreal"},
-    {7, "Silverstone"},
-    {8, "Hockenheim"},
-    {9, "Hungaroring"},
-    {10, "Spa"},
-    {11, "Monza"},
-    {12, "Singapore"},
-    {13, "Suzuka"},
-    {14, "Abu Dhabi"},
-    {15, "Texas"},
-    {16, "Brazil"},
-    {17, "Austria"},
-    {18, "Sochi"},
-    {19, "Mexico"},
-    {20, "Baku (Azerbaijan)"},
-    {21, "Sakhir Short"},
-    {22, "Silverstone Short"},
-    {23, "Texas Short"},
-    {24, "Suzuka Short"},
-    {25, "Hanoi"},
-    {26, "Zandvoort"},
-    {27, "Imola"},
-    {28, "Portimão"},
-    {29, "Jeddah"},
-    {30, "Miami"},
-    {31, "Las Vegas"},
-    {32, "Losail"}
+template <typename T>
+T read_type(char *v)
+{
+    T a;
+
+    std::memcpy(&a, v, sizeof(T));
+
+    return a;
+}
+
+template <typename T>
+T read_tyre(char *v)
+{
+	T tyres = (T)calloc(4, sizeof(std::remove_pointer<T>::type));
+
+	for (int i = 0; i < 4; i++)
+	{
+		std::memcpy(&tyres[i], v, sizeof(std::remove_pointer<T>::type));
+		v += sizeof(std::remove_pointer<T>::type);
+	}
+
+	return tyres;
+}
+
+// Template struct for reading variables
+template<typename T>
+concept arithmetic = std::integral<T> or std::floating_point<T>;
+
+template<typename T>
+struct read_var
+{
+	static T call(char** v) requires (arithmetic<T>)
+    {
+        T ret = read_type<T>(*v);
+        *v += sizeof(T);
+        return ret;
+    }
+	static T call(char** v) requires (!arithmetic<T>)
+    {
+        T ret = read_tyre<T>(*v);
+        *v += (sizeof(std::remove_pointer<T>::type) * 4);
+        return ret;
+    }
 };
+
+
+template <typename Integer, Integer ...I, typename F> constexpr void const_for_each(std::integer_sequence<Integer, I...>, F&& func)
+{
+    (func(std::integral_constant<Integer, I>{}), ...);
+}
+
+template <auto N, typename F> constexpr void const_for(F&& func)
+{
+    if constexpr (N > 0)
+        const_for_each(std::make_integer_sequence<decltype(N), N>{}, std::forward<F>(func));
+}
 
 
 int main()
@@ -66,217 +85,118 @@ int main()
         htons((u_short)20777),
         0
     };
-    int size = 0;
-    int addr_size = sizeof(addr);
-    bind(sock, (sockaddr*)&addr, addr_size);
-    std::vector<std::uint32_t> last_laptimes(22);
-    std::vector<std::ofstream> files(22);
-    std::vector<std::ofstream> lapss(22);
-    bool session_name = false;
-    bool drivers_mapped = false;
+	int size = 0;
+	int addr_size = sizeof(addr);
+	bind(sock, (sockaddr*)&addr, addr_size);
 
-    std::map<int, std::string> drivers;
-    
-    while (true)
-    {
-        size = recvfrom(sock, buffer, 4096, 0, nullptr, nullptr);
-       
-        if (size == -1)
-            std::println("Error {}", WSAGetLastError());
-        packet p = { 0, size, size, buffer };
-        indexed_map a = {
-            {{"Format", &typeid(unsigned short)},
-             {"Year", &typeid(unsigned char)},
-             {"MajorVer", &typeid(unsigned char)},
-             {"MinorVer", &typeid(unsigned char)},
-             {"Version", &typeid(unsigned char)},
-             {"Id", &typeid(unsigned char)},
-             {"UID", &typeid(unsigned long)},
-             {"Time", &typeid(float)},
-             {"Frame id", &typeid(unsigned int)},
-             {"Overall frame id", &typeid(unsigned int)},
-             {"Car index", &typeid(unsigned char)},
-             {"Second car index", &typeid(unsigned char)}}};
-        Packet pkt = pkt_read(&p, a);
-        //std::println("Index {}", pkt.get<unsigned char>("Car index"));
-        if (pkt.get<unsigned char>("Id") == 1 && session_name == false && drivers_mapped == true)
-        {
-            unsigned char index = pkt.get<unsigned char>("Car index");
-            char* ptr = p.data;
-            packet p2 = { 0, size, size, ptr };
-            indexed_map mapp = {
-                {{"m_weather", &typeid(unsigned char)},
-                 {"m_trackTemperature", &typeid(char)},
-                 {"m_airTemperature", &typeid(char)},
-                 {"m_totalLaps", &typeid(unsigned char)},
-                 {"m_trackLength", &typeid(unsigned short)},
-                 {"m_sessionType", &typeid(unsigned char)},
-                 {"m_trackId", &typeid(char)}}
-            };
-            Packet pkt3 = pkt_read(&p2, mapp);
-            std::filesystem::create_directory("tyre_data");
-            std::filesystem::create_directory("laps");
-            auto time = std::chrono::system_clock::now();
-            for (auto driver : drivers)
-            {
-                std::ofstream file;
-                std::ofstream laps;
-                file.open(std::format("tyre_data\\tyre_info_{}_{:%OH_%OM_%OS}.csv", driver.second, time), std::ios::out | std::ios::app);
-                file << "WearRF,WearLF,WearRB,WearLB,Average,time\n";
-                laps.open(std::format("laps\\laps_{}_{:%OH_%OM_%OS}.csv", driver.second, time), std::ios::out | std::ios::app);
-                laps << "LapTime\n";
-                files[driver.first] = std::move(file);
-                lapss[driver.first] = std::move(laps);
-                last_laptimes[driver.first] = 0;
-            }
+	while(true)
+	{
+		size = recvfrom(sock, buffer, 4096, 0, nullptr, nullptr);
+		char *first_ptr = buffer;
+		constexpr frozen::map<frozen::string, int, 12> header = {
+			{"Format", 0},
+			{"Year", 1},
+			{"MajorVer", 2},
+			{"MinorVer", 3},
+			{"Version", 4},
+			{"Id", 5},
+			{"UID", 6},
+			{"Time", 7},
+			{"Frame id", 8},
+			{"Overall frame id", 9},
+			{"Car index", 10},
+			{"Second car index", 11}
+    	};
+		std::tuple<
+		uint16_t, // m_packetFormat
+		uint8_t,  // m_gameYear
+		uint8_t,  // m_gameMajorVersion
+		uint8_t,  // m_gameMinorVersion
+		uint8_t,  // m_packetVersion
+		uint8_t,  // m_packetId
+		uint64_t, // m_sessionUID
+		float,    // m_sessionTime
+		uint32_t, // m_frameIdentifier
+		uint32_t, // m_overallFrameIdentifier
+		uint8_t,  // m_playerCarIndex
+		uint8_t   // m_secondaryPlayerCarIndex
+		> t;
+		constexpr std::size_t size2 = std::tuple_size_v<decltype(t)>;
+		read_comp_pkt(size2, buffer, t);
 
-            session_name = true;
-        }
-        else if (pkt.get<unsigned char>("Id") == 4 && session_name == false && drivers_mapped == false)
-        {
-            char* ptr = p.data + 1;
-            packet p2 = { 0, size, size, ptr };
-            indexed_map mapp = {
-                {{"m_aiControlled", &typeid(unsigned char)},
-                    {"m_driverId", &typeid(unsigned char)},
-                    {"m_networkId", &typeid(unsigned char)},
-                    {"m_teamId", &typeid(unsigned char)},
-                    {"m_myTeam", &typeid(unsigned char)},
-                    {"m_raceNumber", &typeid(unsigned char)},
-                    {"m_nationality", &typeid(unsigned char)},
-                    {"m_name", &typeid(driver_string)},
-                    {"m_yourTelemetry", &typeid(unsigned char)},
-                    {"m_showOnlineNames", &typeid(unsigned char)},
-                    {"m_platform", &typeid(unsigned char)}}
-            };
-            std::vector<Packet> pkts = pkt_read(&p, mapp, 22);
-            for (int i = 0; i < 22; i++)
-            {
-                drivers.insert({ i, pkts[i].get<driver_string>("m_name").name });
-                std::println("Index {}, driver {}", i, pkts[i].get<driver_string>("m_name").name);
-            }
-           drivers_mapped = true;
-        }
-        else if (pkt.get<unsigned char>("Id") == 10 && session_name == true && drivers_mapped == true)
-        {
-            unsigned char index = pkt.get<unsigned char>("Car index");
-            char *ptr = p.data;
-            packet p2 = { 0, size, size, ptr };
-            indexed_map a2 = {
-                {{"m_tyresWearRL", &typeid(float)},
-                 {"m_tyresWearRR", &typeid(float)},
-                 {"m_tyresWearFL", &typeid(float)},
-                 {"m_tyresWearFR", &typeid(float)},
-                 {"m_tyresDamageFL", &typeid(unsigned char)},
-                 {"m_tyresDamageFR", &typeid(unsigned char)},
-                 {"m_tyresDamageRL", &typeid(unsigned char)},
-                 {"m_tyresDamageRR", &typeid(unsigned char)},
-                 {"m_brakesDamageFL", &typeid(unsigned char)},
-                 {"m_brakesDamageFR", &typeid(unsigned char)},
-                 {"m_brakesDamageRL", &typeid(unsigned char)},
-                 {"m_brakesDamageRR", &typeid(unsigned char)},
-                 {"m_frontLeftWingDamage", &typeid(unsigned char)},
-                 {"m_frontRightWingDamage", &typeid(unsigned char)},
-                 {"m_rearWingDamage", &typeid(unsigned char)},
-                 {"m_floorDamage", &typeid(unsigned char)},
-                 {"m_diffuserDamage", &typeid(unsigned char)},
-                 {"m_sidepodDamage", &typeid(unsigned char)},
-                 {"m_drsFault", &typeid(unsigned char)},
-                 {"m_ersFault", &typeid(unsigned char)},
-                 {"m_gearBoxDamage", &typeid(unsigned char)},
-                 {"m_engineDamage", &typeid(unsigned char)},
-                 {"m_engineMGUHWear", &typeid(unsigned char)},
-                 {"m_engineESWear", &typeid(unsigned char)},
-                 {"m_engineCEWear", &typeid(unsigned char)},
-                 {"m_engineICEWear", &typeid(unsigned char)},
-                 {"m_engineMGUKWear", &typeid(unsigned char)},
-                 {"m_engineTCWear", &typeid(unsigned char)},
-                 {"m_engineBlown", &typeid(unsigned char)},
-                 {"m_engineSeized", &typeid(unsigned char)}
-                }};
-            std::vector<Packet> pkt2 = pkt_read(&p2, a2, 22);
-            for (auto driver : drivers)
-            {
-                index = driver.first;
-                float avg = (pkt2[index].get<float>("m_tyresWearFR") + pkt2[index].get<float>("m_tyresWearFL") + pkt2[index].get<float>("m_tyresWearRR") + pkt2[index].get<float>("m_tyresWearRL")) / 4;
-
-                files[driver.first] << std::format("{},{},{},{},{},{}\n", pkt2[index].get<float>("m_tyresWearFR"),
-                    pkt2[index].get<float>("m_tyresWearFL"),
-                    pkt2[index].get<float>("m_tyresWearRR"),
-                    pkt2[index].get<float>("m_tyresWearRL"),
-                    avg,
-                    pkt.get<float>("Time"));
-            }
-
-        }
-        else if (pkt.get<unsigned char>("Id") == 2 && session_name == true && drivers_mapped == true)
-        {
-            unsigned char index = pkt.get<unsigned char>("Car index");
-            char* ptr = p.data;
-            packet p2 = { 0, size, size, ptr };
-            indexed_map mapp = { { {"m_lastLapTimeInMS", &typeid(unsigned int)},
-                                 {"m_currentLapTimeInMS", &typeid(unsigned int)},
-                                 {"m_sector1TimeInMS", &typeid(unsigned short)},
-                                 {"m_sector1TimeMinutes", &typeid(unsigned char)},
-                                 {"m_sector2TimeInMS", &typeid(unsigned short)},
-                                 {"m_sector2TimeMinutes", &typeid(unsigned char)},
-                                 {"m_deltaToCarInFrontInMS", &typeid(unsigned short)},
-                                 {"m_deltaToRaceLeaderInMS", &typeid(unsigned short)},
-                                 {"m_lapDistance", &typeid(float)},
-                                 {"m_totalDistance", &typeid(float)},
-                                 {"m_safetyCarDelta", &typeid(float)},
-                                 {"m_carPosition", &typeid(unsigned char)},
-                                 {"m_currentLapNum", &typeid(unsigned char)},
-                                 {"m_pitStatus", &typeid(unsigned char)},
-                                 {"m_numPitStops", &typeid(unsigned char)},
-                                 {"m_sector", &typeid(unsigned char)},
-                                 {"m_currentLapInvalid", &typeid(unsigned char)},
-                                 {"m_penalties", &typeid(unsigned char)},
-                                 {"m_totalWarnings", &typeid(unsigned char)},
-                                 {"m_cornerCuttingWarnings", &typeid(unsigned char)},
-                                 {"m_numUnservedDriveThroughPens", &typeid(unsigned char)},
-                                 {"m_numUnservedStopGoPens", &typeid(unsigned char)},
-                                 {"m_gridPosition", &typeid(unsigned char)},
-                                 {"m_driverStatus", &typeid(unsigned char)},
-                                 {"m_resultStatus", &typeid(unsigned char)},
-                                 {"m_pitLaneTimerActive", &typeid(unsigned char)},
-                                 {"m_pitLaneTimeInLaneInMS", &typeid(unsigned short)},
-                                 {"m_pitStopTimerInMS", &typeid(unsigned short)},
-                                 {"m_pitStopShouldServePen", &typeid(unsigned char)} } };
-            std::vector<Packet> pkt2 = pkt_read(&p2, mapp, 22);
-
-            for (auto driver : drivers)
-            {
-                index = driver.first;
-                unsigned int lap = pkt2[index].get<unsigned int>("m_lastLapTimeInMS");
-                std::uint32_t last_laptime = last_laptimes[driver.first];
-                if (lap != last_laptime)
-                {
-                    last_laptime = lap;
-                    auto lap_time = std::chrono::milliseconds(lap);
-                    auto min = std::chrono::duration_cast<std::chrono::minutes>(lap_time);
-                    lap_time -= min;
-                    auto sec = std::chrono::duration_cast<std::chrono::seconds>(lap_time);
-                    lap_time -= sec;
-                    lapss[driver.first] << std::format("{}:{}.{}", min.count(), sec.count(), lap_time.count()) << std::endl;
-                    //std::println("Last lap: {}:{}.{}", min.count(), sec.count(), lap_time.count());
-                    last_laptimes[driver.first] = last_laptime;
-                }
-            }
-        }
-        memset(buffer, 0, 4096);
-    }
-    //file.close();
-    closesocket(sock);
-    return 0;
+		if (std::get<header.find("Id")->second>(t) == 0)
+		{
+			std::tuple<float, float, float, float, float, float, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, float, float, float, float, float, float> pkt_1;
+			std::vector<std::tuple<float, float, float, float, float, float, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, float, float, float, float, float, float>> pkts_1;
+			constexpr std::size_t size_motion = std::tuple_size_v<decltype(pkt_1)>;
+			constexpr frozen::map<int, frozen::string, size_motion> motion = 
+			{
+				{0, "m_worldPositionX"},
+				{1, "m_worldPositionY"},
+				{2, "m_worldPositionZ"},
+				{3, "m_worldVelocityX"},
+				{4, "m_worldVelocityY"},
+				{5, "m_worldVelocityZ"},
+				{6, "m_worldForwardDirX"},
+				{7, "m_worldForwardDirY"},
+				{8, "m_worldForwardDirZ"},
+				{9, "m_worldRightDirX"},
+				{10, "m_worldRightDirY"},
+				{11, "m_worldRightDirZ"},
+				{12, "m_gForceLateral"},
+				{13, "m_gForceLongitudinal"},
+				{14, "m_gForceVertical"},
+				{15, "m_yaw"},
+				{16, "m_pitch"},
+				{17, "m_roll"}
+			};
+			for (int i = 0; i < 22;i++)
+			{
+				read_comp_pkt(size_motion, buffer, pkt_1);
+				pkts_1.push_back(pkt_1);
+			}
+		}
+		if (std::get<header.find("Id")->second>(t) == 10)
+		{
+			std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> damage_pkt;
+			std::vector<std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t>> damage_list;
+			constexpr std::size_t size_damage = std::tuple_size_v<decltype(damage_pkt)>;
+			constexpr frozen::map<int, frozen::string, size_damage> damage_names = 
+			{
+				{0, "m_tyresWear"},
+				{1, "m_tyresDamage"},
+				{2, "m_brakesDamage"},
+				{3, "m_frontLeftWingDamage"},
+				{4, "m_frontRightWingDamage"},
+				{5, "m_rearWingDamage"},
+				{6, "m_floorDamage"},
+				{7, "m_diffuserDamage"},
+				{8, "m_sidepodDamage"},
+				{9, "m_drsFault"},
+				{10, "m_ersFault"},
+				{11, "m_gearBoxDamage"},
+				{12, "m_engineDamage"},
+				{13, "m_engineMGUHWear"},
+				{14, "m_engineESWear"},
+				{15, "m_engineCEWear"},
+				{16, "m_engineICEWear"},
+				{17, "m_engineMGUKWear"},
+				{18, "m_engineTCWear"},
+				{19, "m_engineBlown"},
+				{20, "m_engineSeized"}
+			};
+			for (int i = 0; i < 22;i++)
+			{
+				read_comp_pkt(size_damage, buffer, damage_pkt);
+				damage_list.push_back(damage_pkt);
+			}
+			std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> pkt_3 = damage_list[std::get<header.find("Car index")->second>(t)];
+			std::println("Packet overview:");
+			std::println("Wear RL {}", std::get<0>(pkt_3)[0]);
+			std::println("Wear RR {}", std::get<0>(pkt_3)[1]);
+			std::println("Wear FL {}", std::get<0>(pkt_3)[2]);
+			std::println("Wear FR {}", std::get<0>(pkt_3)[3]);
+		}
+		buffer = first_ptr;
+	}
 }
-
-// Ejecutar programa: Ctrl + F5 o menú Depurar > Iniciar sin depurar
-// Depurar programa: F5 o menú Depurar > Iniciar depuración
-
-// Sugerencias para primeros pasos: 1. Use la ventana del Explorador de soluciones para agregar y administrar archivos
-//   2. Use la ventana de Team Explorer para conectar con el control de código fuente
-//   3. Use la ventana de salida para ver la salida de compilación y otros mensajes
-//   4. Use la ventana Lista de errores para ver los errores
-//   5. Vaya a Proyecto > Agregar nuevo elemento para crear nuevos archivos de código, o a Proyecto > Agregar elemento existente para agregar archivos de código existentes al proyecto
-//   6. En el futuro, para volver a abrir este proyecto, vaya a Archivo > Abrir > Proyecto y seleccione el archivo .sln
