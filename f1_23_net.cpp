@@ -9,9 +9,22 @@
 #include <concepts>
 #include <cstring>
 #include <type_traits>
+#include <any>
 
 #pragma comment(lib, "Ws2_32.lib")
 #define read_comp_pkt(size, ptr, t) const_for<size>([&](auto i){std::get<i.value>(t) = read_var<std::tuple_element_t<i.value, decltype(t)>>::call(&ptr);});
+
+template<int size, typename T>
+struct array_with_size
+{
+	T array;
+	int s;
+
+	static constexpr int getsize()
+	{
+		return size;
+	}
+};
 
 template <typename T>
 T read_type(char *v)
@@ -37,9 +50,27 @@ T read_tyre(char *v)
 	return tyres;
 }
 
+template <int size, typename T>
+array_with_size<size, T> read_array(char *v)
+{
+	array_with_size<size, T> a = {0};
+	a.array = (T)calloc(size, sizeof(std::remove_pointer<T>::type));
+
+	for (int i = 0; i < size; i++)
+	{
+		std::memcpy(&a.array[i], v, sizeof(std::remove_pointer<T>::type));
+		v += sizeof(std::remove_pointer<T>::type);
+	}
+
+	return a;
+}
+
 // Template struct for reading variables
 template<typename T>
 concept arithmetic = std::integral<T> or std::floating_point<T>;
+
+template<typename T>
+concept IsPointer = std::is_pointer<T>::value;
 
 template<typename T>
 struct read_var
@@ -50,11 +81,11 @@ struct read_var
         *v += sizeof(T);
         return ret;
     }
-	static T call(char** v) requires (!arithmetic<T>)
+	static T call(char** v) requires (IsPointer<decltype(T::array)>)
     {
-        T ret = read_tyre<T>(*v);
-        *v += (sizeof(std::remove_pointer<T>::type) * 4);
-        return ret;
+        array_with_size<T::getsize(), decltype(T::array)> arr = read_array<T::getsize(), decltype(T::array)>(*v);
+        *v += (sizeof(std::remove_pointer<decltype(T::array)>::type) * T::getsize());
+        return arr;
     }
 };
 
@@ -158,8 +189,8 @@ int main()
 		}
 		if (std::get<header.find("Id")->second>(t) == 10)
 		{
-			std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> damage_pkt;
-			std::vector<std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t>> damage_list;
+			std::tuple<array_with_size<4, float *>, array_with_size<4, uint8_t *>, array_with_size<4, uint8_t *>, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> damage_pkt;
+			std::vector<std::tuple<array_with_size<4, float *>, array_with_size<4, uint8_t *>, array_with_size<4, uint8_t *>, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t>> damage_list;
 			constexpr std::size_t size_damage = std::tuple_size_v<decltype(damage_pkt)>;
 			constexpr frozen::map<int, frozen::string, size_damage> damage_names = 
 			{
@@ -190,12 +221,13 @@ int main()
 				read_comp_pkt(size_damage, buffer, damage_pkt);
 				damage_list.push_back(damage_pkt);
 			}
-			std::tuple<float *, uint8_t *, uint8_t *, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> pkt_3 = damage_list[std::get<header.find("Car index")->second>(t)];
+			std::tuple<array_with_size<4, float *>, array_with_size<4, uint8_t *>, array_with_size<4, uint8_t *>, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t> pkt_3 = damage_list[std::get<header.find("Car index")->second>(t)];
 			std::println("Packet overview:");
-			std::println("Wear RL {}", std::get<0>(pkt_3)[0]);
-			std::println("Wear RR {}", std::get<0>(pkt_3)[1]);
-			std::println("Wear FL {}", std::get<0>(pkt_3)[2]);
-			std::println("Wear FR {}", std::get<0>(pkt_3)[3]);
+			float * tyre_array = std::get<0>(pkt_3).array;
+			std::println("Wear RL {}", tyre_array[0]);
+			std::println("Wear RR {}", tyre_array[1]);
+			std::println("Wear FL {}", tyre_array[2]);
+			std::println("Wear FR {}", tyre_array[3]);
 		}
 		buffer = first_ptr;
 	}
